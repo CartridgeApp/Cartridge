@@ -40,3 +40,4 @@ if [ -d "$WORKFLOWS_DIR" ]; then
 fi
 
 echo "Done. .github now only contains our customizations (Android.yml workflow, no FUNDING.yml)."
+ 
