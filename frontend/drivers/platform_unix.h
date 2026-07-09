@@ -400,6 +400,17 @@ bool is_screen_reader_enabled(void);
 void android_show_saf_tree_picker(void);
 #endif
 
+#ifdef HAVE_CARTRIDGE
+/* Library-mode bootstrap for a non-NativeActivity host (Cartridge M0 spike).
+ * Does the same setup as ANativeActivity_onCreate (installs the callback
+ * table, spawns the emulation thread) but skips
+ * ANativeActivity_setWindowFlags, which requires activity->clazz to be an
+ * instanceof android.app.NativeActivity -- the Cartridge host is a plain
+ * Activity, so window flags are set from the Kotlin side instead. */
+struct android_app *cartridge_android_app_create(ANativeActivity *activity,
+      void *saved_state, size_t saved_state_size);
+#endif
+
 #endif
 
 #endif

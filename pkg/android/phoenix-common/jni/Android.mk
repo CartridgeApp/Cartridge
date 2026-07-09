@@ -12,6 +12,7 @@ HAVE_FILE_LOGGER := 1
 HAVE_GFX_WIDGETS := 1
 HAVE_SAF := 1
 HAVE_BUILTINSMBCLIENT := 1
+HAVE_CARTRIDGE := 1
 
 INCFLAGS    :=
 DEFINES     :=
@@ -58,6 +59,11 @@ LOCAL_MODULE := retroarch-activity
 
 LOCAL_SRC_FILES  +=	$(RARCH_DIR)/griffin/griffin.c \
 							$(RARCH_DIR)/griffin/griffin_cpp.cpp
+
+ifeq ($(HAVE_CARTRIDGE),1)
+LOCAL_SRC_FILES += $(RARCH_DIR)/cartridge/native/cartridge_spike.c
+DEFINES         += -DHAVE_CARTRIDGE
+endif
 
 ifeq ($(HAVE_BUILTINSMBCLIENT),1)
    DEFINES += -DHAVE_BUILTINSMBCLIENT

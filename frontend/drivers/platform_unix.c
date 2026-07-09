@@ -577,6 +577,39 @@ void ANativeActivity_onCreate(ANativeActivity* activity,
          savedState, savedStateSize);
 }
 
+#ifdef HAVE_CARTRIDGE
+/* Cartridge M0 library-mode bootstrap: called by cartridge_spike.c with a
+ * self-constructed ANativeActivity (the host is a plain Kotlin Activity +
+ * SurfaceView, not android.app.NativeActivity). Mirrors
+ * ANativeActivity_onCreate above minus the ANativeActivity_setWindowFlags
+ * call -- see the comment on the declaration in platform_unix.h. */
+struct android_app *cartridge_android_app_create(ANativeActivity *activity,
+      void *saved_state, size_t saved_state_size)
+{
+   activity->callbacks->onDestroy               = onDestroy;
+   activity->callbacks->onStart                 = onStart;
+   activity->callbacks->onResume                = onResume;
+   activity->callbacks->onSaveInstanceState     = onSaveInstanceState;
+   activity->callbacks->onPause                 = onPause;
+   activity->callbacks->onStop                  = onStop;
+   activity->callbacks->onConfigurationChanged  = onConfigurationChanged;
+   activity->callbacks->onLowMemory             = onLowMemory;
+   activity->callbacks->onWindowFocusChanged    = onWindowFocusChanged;
+   activity->callbacks->onNativeWindowCreated   = onNativeWindowCreated;
+   activity->callbacks->onNativeWindowDestroyed = onNativeWindowDestroyed;
+   activity->callbacks->onInputQueueCreated     = onInputQueueCreated;
+   activity->callbacks->onInputQueueDestroyed   = onInputQueueDestroyed;
+   activity->callbacks->onContentRectChanged    = onContentRectChanged;
+
+   if (pthread_key_create(&thread_key, jni_thread_destruct))
+      RARCH_ERR("Error initializing pthread_key.\n");
+
+   activity->instance = android_app_create(activity,
+         saved_state, saved_state_size);
+   return (struct android_app*)activity->instance;
+}
+#endif
+
 void frontend_android_get_name(char *s, size_t len)
 {
    system_property_get("getprop", "ro.product.model", s, len);

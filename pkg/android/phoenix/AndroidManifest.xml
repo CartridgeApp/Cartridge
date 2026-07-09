@@ -40,6 +40,14 @@
             <meta-data android:name="android.app.func_name" android:value="ANativeActivity_onCreate" />
         </activity>
         <activity android:name="com.retroarch.browser.debug.CoreSideloadActivity" android:exported="true"/>
+        <!-- Cartridge M0 library-mode spike (throwaway): boots libretroarch.so
+             from a plain Activity + SurfaceView instead of NativeActivity.
+             See ai-specs/2026-07-09-react-native-interface/plan.md. Launch with:
+             adb shell am start -n <applicationId>/com.retroarch.cartridge.CartridgeSpikeActivity -->
+        <activity android:name="com.retroarch.cartridge.CartridgeSpikeActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen" />
         <receiver android:name="com.retroarch.browser.receiver.InstalledCoresReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="com.retroarch.QUERY_INSTALLED_CORES" />

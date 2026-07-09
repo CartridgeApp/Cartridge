@@ -1,4 +1,6 @@
 buildscript {
+  ext.kotlin_version = '1.6.21'
+
   repositories {
     google()
     jcenter()
@@ -6,6 +8,7 @@ buildscript {
 
   dependencies {
     classpath 'com.android.tools.build:gradle:4.2.0'
+    classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
   }
 }
 
@@ -23,6 +26,7 @@ allprojects {
 }
 
 apply plugin: 'com.android.application'
+apply plugin: 'kotlin-android'
 
 android {
   compileSdkVersion 31
@@ -99,7 +103,7 @@ android {
     main {
       manifest.srcFile 'AndroidManifest.xml'
       assets.srcDirs = ['assets']
-      java.srcDirs = ['src', '../phoenix-common/src', '../../../libretro-common/vfs/saf/src']
+      java.srcDirs = ['src', '../phoenix-common/src', '../../../libretro-common/vfs/saf/src', '../../../cartridge/android/spike']
       jniLibs.srcDir '../phoenix-common/libs'
       jni.srcDirs = []
       res.srcDirs = ['res', '../phoenix-common/res']
@@ -126,6 +130,15 @@ android {
     ndkBuild {
       path '../phoenix-common/jni/Android.mk'
     }
+  }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_1_8
+    targetCompatibility JavaVersion.VERSION_1_8
+  }
+
+  kotlinOptions {
+    jvmTarget = "1.8"
   }
 
   signingConfigs {
@@ -158,6 +171,7 @@ def playCore = 'com.google.android.play:core:1.10.3'
 dependencies {
   playStoreNormalImplementation playCore
   playStorePlusImplementation playCore
+  implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
 }
 
 def dynamicFeatures = file("dynamic_features.gradle")
