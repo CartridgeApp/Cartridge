@@ -47,6 +47,9 @@
 #include "../../retroarch.h"
 #include "../../runloop.h"
 #include "../input_driver.h"
+#ifdef HAVE_CARTRIDGE
+#include "../../cartridge/native/cartridge_input.h"
+#endif
 
 #define MAX_TOUCH 16
 #define MAX_NUM_KEYBOARDS 3
@@ -1717,6 +1720,92 @@ static void android_input_poll_input_gingerbread(
    }
 }
 
+/* Factored out of android_input_poll_input_default() so
+ * cartridge_input_inject_event() (HAVE_CARTRIDGE, below) can run an
+ * externally-sourced AInputEvent through the exact same dispatch as one
+ * read from a real AInputQueue, without duplicating it. Behavior for the
+ * AInputQueue-sourced caller is unchanged. */
+static int32_t android_input_dispatch_event(android_input_t *android,
+      struct android_app *android_app, AInputEvent *event, int predispatched)
+{
+   int32_t handled = 1;
+   int      source = AInputEvent_getSource(event);
+   int  type_event = AInputEvent_getType(event);
+   int          id = android_input_get_id(event);
+   int        port = android_input_get_id_port(android, id, source);
+
+   if (port < 0 && !android_is_keyboard_id(id))
+      port = android_input_recover_port(android, id);
+
+   if (port < 0 && !android_is_keyboard_id(id))
+      handle_hotplug(android, android_app,
+            &port, id, source);
+
+   switch (type_event)
+   {
+      case AINPUT_EVENT_TYPE_MOTION:
+         if ((source & AINPUT_SOURCE_TOUCHPAD))
+            engine_handle_touchpad(android_app, event, port);
+         /* Only handle events from a touchscreen or mouse */
+         else if ((source & (AINPUT_SOURCE_TOUCHSCREEN
+                     | AINPUT_SOURCE_MOUSE_RELATIVE
+                     | AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_MOUSE)))
+            android_input_poll_event_type_motion(android, event,
+                  port, source);
+         else
+            engine_handle_dpad(android_app, event, port, source);
+         break;
+      case AINPUT_EVENT_TYPE_KEY:
+         {
+            int keycode = AKeyEvent_getKeyCode(event);
+
+            if (!keycode)
+               break;
+
+            if (android_is_keyboard_id(id))
+            {
+               if (!predispatched)
+               {
+                  android_input_poll_event_type_keyboard(
+                        event, keycode, &handled);
+                  android_input_poll_event_type_key(
+                        android_app, event, ANDROID_KEYBOARD_PORT,
+                        keycode, source, type_event, &handled);
+               }
+            }
+            else
+               android_input_poll_event_type_key(android_app,
+                     event, port, keycode, source, type_event, &handled);
+         }
+         break;
+   }
+
+   return handled;
+}
+
+#ifdef HAVE_CARTRIDGE
+/* Cartridge M1: the RN-hosted <RetroArchSurface/> is an ordinary View, not
+ * an android.app.NativeActivity window, so the OS never creates a real
+ * AInputQueue for it (that machinery is intrinsic to NativeActivity's own
+ * Java-side window setup -- see cartridge/native/cartridge_input.c). Game
+ * input the Kotlin host doesn't consume as a hotkey is converted from a
+ * Java KeyEvent/MotionEvent via AKeyEvent_fromJava()/AMotionEvent_fromJava()
+ * (NDK API 31+) and handed here, running through the identical dispatch
+ * android_input_poll_input_default() uses for queue-sourced events -- no
+ * separate/duplicated input handling to keep in sync. */
+void cartridge_input_inject_event(AInputEvent *event)
+{
+   input_driver_state_t *input_st  = input_state_get_ptr();
+   android_input_t          *android = (android_input_t*)input_st->current_data;
+   struct android_app   *android_app = (struct android_app*)g_android;
+
+   if (!android || !android_app)
+      return;
+
+   android_input_dispatch_event(android, android_app, event, 0);
+}
+#endif
+
 static void android_input_poll_input_default(android_input_t *android)
 {
    AInputEvent              *event = NULL;
@@ -1727,59 +1816,10 @@ static void android_input_poll_input_default(android_input_t *android)
    {
       while (AInputQueue_getEvent(android_app->inputQueue, &event) >= 0)
       {
-         int32_t   handled = 1;
          int predispatched = AInputQueue_preDispatchEvent(
                android_app->inputQueue, event);
-         int        source = AInputEvent_getSource(event);
-         int    type_event = AInputEvent_getType(event);
-         int            id = android_input_get_id(event);
-         int          port = android_input_get_id_port(android, id, source);
-
-         if (port < 0 && !android_is_keyboard_id(id))
-            port = android_input_recover_port(android, id);
-
-         if (port < 0 && !android_is_keyboard_id(id))
-            handle_hotplug(android, android_app,
-                  &port, id, source);
-
-         switch (type_event)
-         {
-            case AINPUT_EVENT_TYPE_MOTION:
-               if ((source & AINPUT_SOURCE_TOUCHPAD))
-                  engine_handle_touchpad(android_app, event, port);
-               /* Only handle events from a touchscreen or mouse */
-               else if ((source & (AINPUT_SOURCE_TOUCHSCREEN
-                           | AINPUT_SOURCE_MOUSE_RELATIVE
-                           | AINPUT_SOURCE_STYLUS | AINPUT_SOURCE_MOUSE)))
-                  android_input_poll_event_type_motion(android, event,
-                        port, source);
-               else
-                  engine_handle_dpad(android_app, event, port, source);
-               break;
-            case AINPUT_EVENT_TYPE_KEY:
-               {
-                  int keycode = AKeyEvent_getKeyCode(event);
-
-                  if (!keycode)
-                     break;
-
-                  if (android_is_keyboard_id(id))
-                  {
-                     if (!predispatched)
-                     {
-                        android_input_poll_event_type_keyboard(
-                              event, keycode, &handled);
-                        android_input_poll_event_type_key(
-                              android_app, event, ANDROID_KEYBOARD_PORT,
-                              keycode, source, type_event, &handled);
-                     }
-                  }
-                  else
-                     android_input_poll_event_type_key(android_app,
-                           event, port, keycode, source, type_event, &handled);
-               }
-               break;
-         }
+         int32_t     handled = android_input_dispatch_event(
+               android, android_app, event, predispatched);
 
          if (!predispatched)
             AInputQueue_finishEvent(android_app->inputQueue, event,
@@ -1906,8 +1946,16 @@ static void android_input_poll(void *data)
    android_input_t *android        = (android_input_t*)data;
    settings_t            *settings = config_get_ptr();
 
+   /* ALooper_pollAll() was removed by the NDK (not just deprecated) as of
+    * a modern enough target/build NDK -- Cartridge's Gradle-driven ndk-build
+    * is the first build path to compile this file with one (NDK 27, needed
+    * for cartridge_input.c's AKeyEvent_fromJava/AMotionEvent_fromJava, both
+    * API 31+). ALooper_pollOnce is the documented drop-in replacement for a
+    * loop like this one (NDK docs: "If you call ALooper_pollOnce in a loop,
+    * you must treat all return values as if they also indicate
+    * ALOOPER_POLL_WAKE", which this loop already does). */
    while ((ident =
-            ALooper_pollAll(settings->uints.input_block_timeout,
+            ALooper_pollOnce(settings->uints.input_block_timeout,
                NULL, NULL, NULL)) >= 0)
    {
       switch (ident)

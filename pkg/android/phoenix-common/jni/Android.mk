@@ -61,7 +61,11 @@ LOCAL_SRC_FILES  +=	$(RARCH_DIR)/griffin/griffin.c \
 							$(RARCH_DIR)/griffin/griffin_cpp.cpp
 
 ifeq ($(HAVE_CARTRIDGE),1)
-LOCAL_SRC_FILES += $(RARCH_DIR)/cartridge/native/cartridge_spike.c
+LOCAL_SRC_FILES += $(RARCH_DIR)/cartridge/native/cartridge_spike.c \
+						  $(RARCH_DIR)/cartridge/native/cartridge_host.c \
+						  $(RARCH_DIR)/cartridge/native/cartridge_api.c \
+						  $(RARCH_DIR)/cartridge/native/cartridge_events.c \
+						  $(RARCH_DIR)/cartridge/native/cartridge_input.c
 DEFINES         += -DHAVE_CARTRIDGE
 endif
 

@@ -105,6 +105,10 @@
 #ifdef HAVE_DISCORD
 #include "network/discord.h"
 #endif
+#ifdef HAVE_CARTRIDGE
+#include "cartridge/native/cartridge_api.h"
+#include "cartridge/native/cartridge_events.h"
+#endif
 
 #include "config.def.h"
 
@@ -5564,6 +5568,10 @@ void runloop_msg_queue_push(
 #endif
    runloop_state_t *runloop_st    = &runloop_state;
 
+#ifdef HAVE_CARTRIDGE
+   cartridge_events_notify_message(msg);
+#endif
+
    RUNLOOP_MSG_QUEUE_LOCK(runloop_st);
 #ifdef HAVE_ACCESSIBILITY
    if (is_accessibility_enabled(
@@ -7536,6 +7544,9 @@ int runloop_iterate(void)
 #endif
    bool audio_sync                        = settings->bools.audio_sync;
    bool savestate_automatic_enable        = settings->uints.savestate_automatic_interval > 0;
+#ifdef HAVE_CARTRIDGE
+   cartridge_api_poll();
+#endif
 #ifdef HAVE_DISCORD
    discord_state_t *discord_st            = discord_state_get_ptr();
 
