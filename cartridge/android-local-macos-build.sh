@@ -122,6 +122,18 @@ if [ "$do_install" -eq 1 ]; then
     echo "error: could not find phoenix-aarch64-debug.apk to install" >&2
     exit 1
   fi
+  echo "Waiting for device..."
+  adb wait-for-device
+
   echo "Installing $apk to connected device..."
-  adb install -r "$apk"
+  install_ok=0
+  for attempt in 1 2 3; do
+    if adb install -r -t "$apk"; then
+      install_ok=1
+      break
+    fi
+    echo "adb install failed (attempt $attempt/3), retrying in 2s..." >&2
+    sleep 2
+  done
+  [ "$install_ok" -eq 1 ] || { echo "error: adb install failed after 3 attempts" >&2; exit 1; }
 fi
