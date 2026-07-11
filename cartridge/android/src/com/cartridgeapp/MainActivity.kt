@@ -1,4 +1,4 @@
-package com.retroarch.cartridge
+package com.cartridgeapp
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -46,8 +46,16 @@ class MainActivity : ReactActivity() {
 
         // Edit for your device/core/ROM, or override via adb intent extras:
         //   adb shell am start -n <applicationId>/.MainActivity \
-        //       --es LIBRETRO /sdcard/.../some_libretro_android.so \
+        //       --es LIBRETRO /data/data/<applicationId>/cores/some_libretro_android.so \
         //       --es ROM /sdcard/.../game.ext
+        //
+        // LIBRETRO must resolve to a path under the app's private data dir
+        // (/data/data/<applicationId>/...), not external/shared storage --
+        // Android's dynamic linker refuses to dlopen() executable code from
+        // anywhere outside a small set of trusted namespace paths (see
+        // "permitted_paths" in a linker error), regardless of file
+        // permissions or MANAGE_EXTERNAL_STORAGE. ROM/content paths have no
+        // such restriction since they're just read as data.
         private const val DEFAULT_CORE_PATH = "/sdcard/RetroArch/cores/mgba_libretro_android.so"
         private const val DEFAULT_ROM_PATH = "/sdcard/RetroArch/roms/game.gba"
 

@@ -39,7 +39,7 @@ const path = require('path');
 
 // cartridge/app/cartridge-plugin/ -> cartridge/
 const CARTRIDGE_DIR = path.resolve(__dirname, '..', '..');
-const KOTLIN_PACKAGE_PATH = 'com/retroarch/cartridge';
+const KOTLIN_PACKAGE_PATH = 'com/cartridgeapp';
 
 function copyFileSync(src, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -100,10 +100,10 @@ function withCartridgePackageRegistration(config) {
   return withMainApplication(config, (config) => {
     let { contents } = config.modResults;
 
-    if (!contents.includes('com.retroarch.cartridge.CartridgePackage')) {
+    if (!contents.includes('com.cartridgeapp.CartridgePackage')) {
       contents = contents.replace(
         'import com.facebook.react.PackageList',
-        'import com.facebook.react.PackageList\nimport com.retroarch.cartridge.CartridgePackage'
+        'import com.facebook.react.PackageList\nimport com.cartridgeapp.CartridgePackage'
       );
       contents = contents.replace(
         'PackageList(this).packages.apply {',

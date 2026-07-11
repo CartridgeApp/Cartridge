@@ -1,4 +1,4 @@
-package com.retroarch.cartridge
+package com.cartridgeapp
 
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule

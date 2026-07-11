@@ -1,4 +1,4 @@
-package com.retroarch.cartridge
+package com.cartridgeapp
 
 import android.view.KeyEvent
 import android.view.MotionEvent

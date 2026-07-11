@@ -25,7 +25,7 @@
     "type": "all",
     "jsSrcsDir": "src/specs",
     "android": {
-      "javaPackageName": "com.retroarch.cartridge"
+      "javaPackageName": "com.cartridgeapp"
     }
   }
 }
