@@ -2175,6 +2175,8 @@ void video_driver_set_stub_frame(void)
 {
    video_driver_state_t *video_st = &video_driver_st;
    video_driver_t *vid            = video_st->current_video;
+   if (!vid)
+      return;
    video_st->frame_bak            = vid->frame;
    vid->frame                     = video_null.frame;
 }
@@ -2183,6 +2185,8 @@ void video_driver_unset_stub_frame(void)
 {
    video_driver_state_t *video_st = &video_driver_st;
    video_driver_t *vid            = video_st->current_video;
+   if (!vid)
+      return;
    if (video_st->frame_bak)
       vid->frame                  = video_st->frame_bak;
 
