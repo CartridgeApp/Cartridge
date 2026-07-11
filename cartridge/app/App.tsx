@@ -1,9 +1,9 @@
-import {StatusBar} from 'expo-status-bar';
-import {useEffect, useState} from 'react';
-import {Pressable, StyleSheet, Text, View} from 'react-native';
+import { StatusBar } from "expo-status-bar";
+import { useEffect, useState } from "react";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
-import Cartridge, {CartridgeEvent} from './src/CartridgeClient';
-import RetroArchSurface from './src/specs/RetroArchSurfaceNativeComponent';
+import Cartridge, { CartridgeEvent } from "./src/CartridgeClient";
+import RetroArchSurface from "./src/specs/RetroArchSurfaceNativeComponent";
 
 /**
  * Cartridge M1 exit-criteria demo: <RetroArchSurface/> composited under a
@@ -20,7 +20,7 @@ export default function App() {
 
   useEffect(() => {
     return Cartridge.addEventListener((event: CartridgeEvent) => {
-      setLog(prev => [`${event.name}: ${event.detail}`, ...prev].slice(0, 8));
+      setLog((prev) => [`${event.name}: ${event.detail}`, ...prev].slice(0, 8));
     });
   }, []);
 
@@ -28,7 +28,7 @@ export default function App() {
     setBusy(true);
     try {
       const result = await Cartridge.setPaused(!paused);
-      setPaused(result === '1');
+      setPaused(result === "1");
     } finally {
       setBusy(false);
     }
@@ -48,11 +48,17 @@ export default function App() {
       <RetroArchSurface style={StyleSheet.absoluteFill} />
 
       <View style={styles.overlay} pointerEvents="box-none">
-        {Cartridge.isMock && <Text style={styles.mockBadge}>mock FFI (no native module)</Text>}
+        {Cartridge.isMock && (
+          <Text style={styles.mockBadge}>mock FFI (no native module)</Text>
+        )}
 
         <View style={styles.buttonRow}>
-          <Pressable style={styles.button} onPress={togglePause} disabled={busy}>
-            <Text style={styles.buttonText}>{paused ? 'Resume' : 'Pause'}</Text>
+          <Pressable
+            style={styles.button}
+            onPress={togglePause}
+            disabled={busy}
+          >
+            <Text style={styles.buttonText}>{paused ? "Resume" : "Pause"}</Text>
           </Pressable>
           <Pressable style={styles.button} onPress={screenshot} disabled={busy}>
             <Text style={styles.buttonText}>Screenshot</Text>
@@ -76,36 +82,36 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: "#000",
   },
   overlay: {
     flex: 1,
-    justifyContent: 'flex-end',
+    justifyContent: "flex-end",
     padding: 24,
   },
   mockBadge: {
-    color: '#ffcc00',
+    color: "#ffcc00",
     marginBottom: 8,
   },
   buttonRow: {
-    flexDirection: 'row',
+    flexDirection: "row",
     gap: 12,
   },
   button: {
-    backgroundColor: 'rgba(255,255,255,0.85)',
+    backgroundColor: "rgba(255,255,255,0.85)",
     paddingVertical: 12,
     paddingHorizontal: 20,
     borderRadius: 8,
   },
   buttonText: {
-    fontWeight: '600',
+    fontWeight: "600",
   },
   log: {
     marginTop: 16,
   },
   logLine: {
-    color: '#0f0',
-    fontFamily: 'monospace',
+    color: "#0f0",
+    fontFamily: "monospace",
     fontSize: 12,
   },
 });
