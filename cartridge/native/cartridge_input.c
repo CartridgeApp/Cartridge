@@ -23,7 +23,7 @@
 #include "cartridge_input.h"
 
 JNIEXPORT jboolean JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeInjectKeyEvent(
+Java_com_cartridgeapp_CartridgeNative_nativeInjectKeyEvent(
       JNIEnv *env, jobject thiz, jobject key_event)
 {
    /* AKeyEvent_fromJava() returns const AInputEvent* in the NDK headers;
@@ -42,7 +42,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeInjectKeyEvent(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeInjectMotionEvent(
+Java_com_cartridgeapp_CartridgeNative_nativeInjectMotionEvent(
       JNIEnv *env, jobject thiz, jobject motion_event)
 {
    AInputEvent *event = (AInputEvent*)AMotionEvent_fromJava(env, motion_event);

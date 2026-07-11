@@ -68,7 +68,7 @@ static char *cartridge_strdup(JNIEnv *env, jstring str)
  * on the stateless CartridgeNative object every other native method here
  * lives on. */
 JNIEXPORT jboolean JNICALL
-Java_com_retroarch_cartridge_MainActivity_nativeCreate(
+Java_com_cartridgeapp_MainActivity_nativeCreate(
       JNIEnv *env, jobject thiz, jobject asset_manager,
       jstring internal_data_path, jint sdk_version)
 {
@@ -115,7 +115,7 @@ Java_com_retroarch_cartridge_MainActivity_nativeCreate(
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceCreated(
+Java_com_cartridgeapp_CartridgeNative_nativeSurfaceCreated(
       JNIEnv *env, jobject thiz, jobject surface)
 {
    ANativeWindow *window;
@@ -129,7 +129,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceCreated(
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceDestroyed(
+Java_com_cartridgeapp_CartridgeNative_nativeSurfaceDestroyed(
       JNIEnv *env, jobject thiz)
 {
    if (!s_created || !s_callbacks.onNativeWindowDestroyed)
@@ -140,7 +140,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceDestroyed(
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceChanged(
+Java_com_cartridgeapp_CartridgeNative_nativeSurfaceChanged(
       JNIEnv *env, jobject thiz, jint left, jint top, jint right, jint bottom)
 {
    ARect rect;
@@ -158,35 +158,35 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeSurfaceChanged(
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeStart(JNIEnv *env, jobject thiz)
+Java_com_cartridgeapp_CartridgeNative_nativeStart(JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onStart)
       s_callbacks.onStart(&s_activity);
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeResume(JNIEnv *env, jobject thiz)
+Java_com_cartridgeapp_CartridgeNative_nativeResume(JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onResume)
       s_callbacks.onResume(&s_activity);
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativePause(JNIEnv *env, jobject thiz)
+Java_com_cartridgeapp_CartridgeNative_nativePause(JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onPause)
       s_callbacks.onPause(&s_activity);
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeStop(JNIEnv *env, jobject thiz)
+Java_com_cartridgeapp_CartridgeNative_nativeStop(JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onStop)
       s_callbacks.onStop(&s_activity);
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeDestroy(JNIEnv *env, jobject thiz)
+Java_com_cartridgeapp_CartridgeNative_nativeDestroy(JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onDestroy)
       s_callbacks.onDestroy(&s_activity);
@@ -205,7 +205,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeDestroy(JNIEnv *env, jobject 
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeWindowFocusChanged(
+Java_com_cartridgeapp_CartridgeNative_nativeWindowFocusChanged(
       JNIEnv *env, jobject thiz, jboolean has_focus)
 {
    if (s_created && s_callbacks.onWindowFocusChanged)
@@ -213,7 +213,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeWindowFocusChanged(
 }
 
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeConfigurationChanged(
+Java_com_cartridgeapp_CartridgeNative_nativeConfigurationChanged(
       JNIEnv *env, jobject thiz)
 {
    if (s_created && s_callbacks.onConfigurationChanged)
@@ -225,7 +225,7 @@ Java_com_retroarch_cartridge_CartridgeNative_nativeConfigurationChanged(
  * this goes straight through cartridge_api's thread-marshaled queue with no
  * callback -- fire and forget, same as any other cartridge_api_* caller. */
 JNIEXPORT void JNICALL
-Java_com_retroarch_cartridge_CartridgeNative_nativeToggleMenu(
+Java_com_cartridgeapp_CartridgeNative_nativeToggleMenu(
       JNIEnv *env, jobject thiz)
 {
    cartridge_api_toggle_paused(NULL, NULL);
