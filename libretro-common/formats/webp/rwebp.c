@@ -22,7 +22,15 @@
  * inverse transforms, 4x4 and 16x16 intra prediction, both the simple
  * and normal loop filters, fancy chroma upsampling and YUV->RGB. Only
  * VP8 key frames occur in WebP, so inter-frame prediction (motion
- * vectors, golden/altref reference frames) is intentionally absent. */
+ * vectors, golden/altref reference frames) is intentionally absent.
+ *
+ * Alpha (ALPH chunks, all filter methods) is applied to lossy images,
+ * and animated WebP (ANMF) is decoded into fully composited canvas
+ * frames following the container spec's canvas/blend/dispose model.
+ *
+ * What it does not implement: encoding, color profiles and EXIF/XMP
+ * metadata (the chunks are skipped), and fragments (an abandoned spec
+ * draft). */
 
 #include <stdio.h>
 #include <stdint.h>
@@ -179,30 +187,50 @@ static int vh_next_tbl_bits(const int *count, int len, int root_bits)
 static int vh_build(vh *h, const uint8_t *lens, int ns, int root)
 {
    int count[VH_MAXCL + 1], offset[VH_MAXCL + 1];
-   int sorted[4096];
+   /* Symbol scratch, heap rather than stack.  As int sorted[4096] this
+    * was 16 KiB in one frame - twice the 8 KiB a GEKKO thread gets
+    * (STACKSIZE in rthreads/gx_pthread.h) - and it is reachable from
+    * a task handler, so it runs on a worker rather than the main
+    * thread whenever the task queue is threaded:
+    * task_file_load_handler -> task_image_load_handler ->
+    * task_image_process -> image_transfer_process ->
+    * rwebp_process_image -> ... -> vh_build, and the same via
+    * task_overlay_handler.  Wii and GameCube build HAVE_RWEBP and
+    * HAVE_THREADS both.
+    *
+    * uint16_t rather than int as well: every value here is a symbol
+    * index, bounded by the ns > 4096 rejection below, and every read
+    * of it is already masked with 0xFFFF. */
+   uint16_t *sorted = (uint16_t*)malloc(4096 * sizeof(*sorted));
    int total_size = 1 << root;
    int len, symbol, i, pass;
    uint32_t *t = NULL;
 
-   if (ns > 4096) return -1;
+   if (!sorted)
+      return -1;
+   if (ns > 4096)
+      goto fail;
    memset(count, 0, sizeof(count));
    for (symbol = 0; symbol < ns; symbol++)
    {
-      if (lens[symbol] > VH_MAXCL) return -1;
+      if (lens[symbol] > VH_MAXCL)
+         goto fail;
       count[lens[symbol]]++;
    }
-   if (count[0] == ns) return -1;
+   if (count[0] == ns)
+      goto fail;
 
    offset[1] = 0;
    for (len = 1; len < VH_MAXCL; len++)
    {
-      if (count[len] > (1 << len)) return -1;
+      if (count[len] > (1 << len))
+         goto fail;
       offset[len + 1] = offset[len] + count[len];
    }
    for (symbol = 0; symbol < ns; symbol++)
    {
       int cl = lens[symbol];
-      if (cl > 0) sorted[offset[cl]++] = symbol;
+      if (cl > 0) sorted[offset[cl]++] = (uint16_t)symbol;
    }
 
    /* Single-symbol special case: 0-bit code returns that symbol. */
@@ -210,10 +238,12 @@ static int vh_build(vh *h, const uint8_t *lens, int ns, int root)
    {
       total_size = 1 << root;
       h->t = (uint32_t*)calloc(total_size, sizeof(uint32_t));
-      if (!h->t) return -1;
+      if (!h->t)
+         goto fail;
       h->sz = total_size; h->rb = root;
       for (i = 0; i < total_size; i++)
          h->t[i] = (uint32_t)(sorted[0] & 0xFFFF);
+      free(sorted);
       return 0;
    }
 
@@ -274,12 +304,18 @@ static int vh_build(vh *h, const uint8_t *lens, int ns, int root)
       if (pass == 0)
       {
          t = (uint32_t*)calloc(total_size + 1, sizeof(uint32_t));
-         if (!t) return -1;
+         if (!t)
+            goto fail;
       }
    }
 
    h->t = t; h->sz = total_size; h->rb = root;
+   free(sorted);
    return 0;
+
+fail:
+   free(sorted);
+   return -1;
 }
 
 static INLINE int vh_read(const vh *h, vbr *b)
@@ -719,7 +755,21 @@ typedef struct vlbd
    int xi;          /* current inverse transform (reverse order) */
    int xrow;        /* row cursor within the current transform */
    uint32_t *xout;  /* CIDX expansion target */
+   int swap_rb;     /* emit memory R,G,B,A words instead of ARGB */
+   int swrow;       /* final-buffer rows already channel-swapped */
 } vlbd;
+
+/* Swap the R and B channel bytes of n words in place (ARGB <-> the
+ * memory R,G,B,A layout). */
+static void vl_swap_px(uint32_t *p, size_t n)
+{
+   size_t i;
+   for (i = 0; i < n; i++)
+   {
+      uint32_t v = p[i];
+      p[i] = (v & 0xFF00FF00u) | ((v & 0xFF) << 16) | ((v >> 16) & 0xFF);
+   }
+}
 
 static void vlbd_abort(vlbd *s)
 {
@@ -810,7 +860,18 @@ xfail:
  * transform work remains, 0 when all transforms are done, -1 on error.
  * Row-range slicing preserves the original top-to-bottom order, which
  * the predictor transform relies on. The loop bodies are the original
- * inverse-transform passes verbatim. */
+ * inverse-transform passes verbatim.
+ *
+ * When swap_rb is set, output rows are converted to memory R,G,B,A
+ * order as they become final: rows completed by the LAST transform
+ * pass are swapped at the end of the same call, while they are still
+ * cache-warm, instead of by a whole-image post-pass over cold memory.
+ * The predictor transform reads the row above the one being predicted,
+ * so mid-pass its most recent completed row is left unswapped until
+ * the following call has moved past it (pointwise transforms have no
+ * such dependency). Transform-less streams have no pass to fuse into;
+ * for those the swap runs as its own sliced stage below, and the same
+ * branch flushes any deferred tail row. */
 static int vlbd_xform_rows(vlbd *s, int nrows)
 {
    uint32_t *pix = s->st.pix;
@@ -818,12 +879,26 @@ static int vlbd_xform_rows(vlbd *s, int nrows)
    const uint32_t height = s->height;
    int cw = s->cw;
    int r0, r1;
+   int was_last, ptype;
 
    if (s->xi < 0)
+   {
+      if (s->swap_rb && s->swrow < (int)height)
+      {
+         int r1s = s->swrow + nrows;
+         if (r1s > (int)height) r1s = (int)height;
+         vl_swap_px(s->st.pix + (size_t)s->swrow * width,
+               (size_t)(r1s - s->swrow) * width);
+         s->swrow = r1s;
+         return (s->swrow < (int)height) ? 1 : 0;
+      }
       return 0;
+   }
    r0 = s->xrow;
    r1 = r0 + nrows;
    if (r1 > (int)height) r1 = (int)height;
+   was_last = (s->xi == 0);
+   ptype    = s->xf[s->xi].type;
 
    {
       xf_t *x = &s->xf[s->xi];
@@ -956,6 +1031,27 @@ static int vlbd_xform_rows(vlbd *s, int nrows)
    }
    else
       s->xrow = r1;
+
+   /* Fused channel swap: rows written by the last transform pass are
+    * final, so convert them while they are still cache-warm. A still
+    * in-flight predictor pass will read its most recent row as the
+    * prediction context of the next call, so that row is deferred one
+    * call (the completion case swaps through height regardless). The
+    * final buffer is xout while a last-transform CIDX expansion is in
+    * flight, and st.pix otherwise (including just-promoted xout). */
+   if (s->swap_rb && was_last)
+   {
+      int safe = r1;
+      if (ptype == XF_PRED && r1 < (int)height)
+         safe = r1 - 1;
+      if (safe > s->swrow)
+      {
+         uint32_t *fin = s->xout ? s->xout : s->st.pix;
+         vl_swap_px(fin + (size_t)s->swrow * width,
+               (size_t)(safe - s->swrow) * width);
+         s->swrow = safe;
+      }
+   }
    return (s->xi >= 0) ? 1 : 0;
 }
 
@@ -973,20 +1069,25 @@ static uint32_t *vlbd_finish(vlbd *s)
    return pix;
 }
 
-static uint32_t *vl_decode_body(vbr *brp, uint32_t width, uint32_t height)
+static uint32_t *vl_decode_body(vbr *brp, uint32_t width, uint32_t height,
+      int swap_rb)
 {
    vlbd s;
    if (vlbd_begin(&s, brp, width, height) != 0)
       return NULL;
+   s.swap_rb = swap_rb;
    while (vlds_pixels(&s.st, s.cw * s.ch) > 0)
       ;
-   while (vlbd_xform_rows(&s, (int)height) > 0)
+   /* Bounded row chunks (matching the sliced driver) keep the fused
+    * channel swap in vlbd_xform_rows operating on cache-warm rows
+    * instead of running one whole-image pass after another. */
+   while (vlbd_xform_rows(&s, 64) > 0)
       ;
    return vlbd_finish(&s);
 }
 
 static uint32_t *vl_decode_full(const uint8_t *data, size_t len,
-      unsigned *ow, unsigned *oh)
+      unsigned *ow, unsigned *oh, int swap_rb)
 {
    vbr br;
    uint32_t sig, width, height;
@@ -999,7 +1100,7 @@ static uint32_t *vl_decode_full(const uint8_t *data, size_t len,
    height = vbr_read(&br, 14) + 1;
    vbr_read(&br, 1); /* alpha_is_used */
    if (vbr_read(&br, 3) != 0) return NULL; /* version */
-   pix = vl_decode_body(&br, width, height);
+   pix = vl_decode_body(&br, width, height, swap_rb);
    if (pix) { *ow = width; *oh = height; }
    return pix;
 }
@@ -1089,7 +1190,7 @@ static uint8_t *alph_decode(const uint8_t *data, size_t len,
       uint32_t *pix;
       size_t n = (size_t)w * h, k;
       vbr_init(&br, data + 1, len - 1);
-      pix = vl_decode_body(&br, w, h);
+      pix = vl_decode_body(&br, w, h, 0);
       if (!pix) { free(plane); return NULL; }
       for (k = 0; k < n; k++)
          plane[k] = (uint8_t)((pix[k] >> 8) & 0xFF); /* green */
@@ -1113,10 +1214,16 @@ static uint32_t *rwebp_do(const uint8_t *buf, size_t len,
    rw_ctr c;
    uint32_t *pix = NULL;
    if (!rw_parse(buf, len, &c)) return NULL;
-   if (c.vp8l && c.vp8ls > 0) pix = vl_decode_full(c.vp8l, c.vp8ls, w, h);
+   /* Both decoders emit the requested channel order directly - the
+    * lossy path at the YUV->RGB store (swap_rb), the lossless path
+    * fused into the final inverse-transform pass - so no post-pass
+    * swizzle is needed. The ALPH composite is order-agnostic: alpha
+    * is the top byte of the word in both layouts. */
+   if (c.vp8l && c.vp8ls > 0)
+      pix = vl_decode_full(c.vp8l, c.vp8ls, w, h, rgba ? 1 : 0);
    if (!pix && c.vp8 && c.vp8s > 0)
    {
-      pix = rvp8_decode(c.vp8, c.vp8s, w, h);
+      pix = rvp8_decode(c.vp8, c.vp8s, w, h, rgba ? 1 : 0);
       if (pix && c.alph && c.alphs > 0)
       {
          uint8_t *ap = alph_decode(c.alph, c.alphs, *w, *h);
@@ -1129,16 +1236,6 @@ static uint32_t *rwebp_do(const uint8_t *buf, size_t len,
          }
       }
    }
-   if (!pix) return NULL;
-   if (rgba)
-   {
-      unsigned i, n = (*w) * (*h);
-      for (i = 0; i < n; i++)
-      {
-         uint32_t p = pix[i];
-         pix[i] = (p & 0xFF00FF00u) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF);
-      }
-   }
    return pix;
 }
 
@@ -1146,7 +1243,7 @@ static uint32_t *rwebp_do(const uint8_t *buf, size_t len,
  * header) into RGBA. Mirrors rwebp_do's lossy/lossless + ALPH handling
  * but operates on the frame's local chunk list. */
 static uint32_t *rwebp_anim_frame_pixels(const uint8_t *d, size_t sz,
-      unsigned *ow, unsigned *oh, int *out_opaque)
+      unsigned *ow, unsigned *oh, int *out_opaque, int swap_rb)
 {
    const uint8_t *fv = NULL, *fl = NULL, *fa = NULL;
    size_t fvs = 0, fls = 0, fas = 0;
@@ -1167,7 +1264,7 @@ static uint32_t *rwebp_anim_frame_pixels(const uint8_t *d, size_t sz,
    if (out_opaque)
       *out_opaque = 0;
    if (fl && fls > 0)
-      pix = vl_decode_full(fl, fls, &w, &h);
+      pix = vl_decode_full(fl, fls, &w, &h, swap_rb); /* canvas order */
    else if (fv && fvs > 0)
    {
       /* A VP8 sub-image without an ALPH chunk decodes with every alpha
@@ -1176,7 +1273,7 @@ static uint32_t *rwebp_anim_frame_pixels(const uint8_t *d, size_t sz,
        * caller can skip per-pixel blending for such frames. */
       if (out_opaque && !(fa && fas > 0))
          *out_opaque = 1;
-      pix = rvp8_decode(fv, fvs, &w, &h);
+      pix = rvp8_decode(fv, fvs, &w, &h, swap_rb); /* canvas order */
       if (pix && fa && fas > 0)
       {
          uint8_t *ap = alph_decode(fa, fas, w, h);
@@ -1190,14 +1287,24 @@ static uint32_t *rwebp_anim_frame_pixels(const uint8_t *d, size_t sz,
       }
    }
    if (!pix) return NULL;
-   /* Convert to R,B-swapped (memory R,G,B,A) to match the anim canvas. */
+   /* Frames of both kinds decode straight into the canvas's current
+    * channel order (the swap_rb parameter): lossy via the rvp8_decode
+    * store, lossless via the transform-fused swap in vl_decode_full.
+    * The ALPH merge and the opacity scan below touch only byte 3, so
+    * they are order-agnostic, as is everything downstream (the blend
+    * loops channels 0/8/16 symmetrically, disposal clears to zero). All
+    * that remains is the AND-mask accumulation over the alpha bytes:
+    * encoders routinely emit an ALPH chunk (or a VP8L alpha channel)
+    * whose bytes are all 0xFF, and detecting that lets the compositor
+    * use a plain row copy instead of per-pixel blending over the
+    * whole frame. */
    {
       unsigned i, n = w * h;
+      uint32_t acc = 0xFF000000u;
       for (i = 0; i < n; i++)
-      {
-         uint32_t px = pix[i];
-         pix[i] = (px & 0xFF00FF00u) | ((px & 0xFF) << 16) | ((px >> 16) & 0xFF);
-      }
+         acc &= pix[i];
+      if (out_opaque && (acc >> 24) == 0xFF)
+         *out_opaque = 1;
    }
    *ow = w; *oh = h;
    return pix;
@@ -1311,8 +1418,19 @@ struct rwebp_anim_stream
    int       canvas_w, canvas_h;
    int       loop_count;
    uint32_t *canvas;
-   uint32_t *disposed;
+   /* Disposal is applied lazily: the returned canvas must stay intact
+    * until the next call, and the post-disposal state differs from it
+    * only inside the previous frame's rectangle, so instead of keeping
+    * a second full canvas ('disposed') and copying the whole canvas
+    * back and forth around every frame, remember the rectangle and
+    * clear just that region when the next frame is prepared. */
+   int       prev_fx, prev_fy, prev_fw, prev_fh;
    int       prev_disp_bg, prev_full, prev_key;
+   /* Channel order of the canvas (and of emitted frames): 0 = memory
+    * R,G,B,A (the default), 1 = ARGB words.  A property of the whole
+    * canvas, since frames blend onto it; switched at frame boundaries
+    * by rwebp_anim_stream_set_argb. */
+   int       emit_argb;
 };
 
 void rwebp_anim_stream_close(rwebp_anim_stream_t *s)
@@ -1320,7 +1438,6 @@ void rwebp_anim_stream_close(rwebp_anim_stream_t *s)
    if (!s) return;
    free(s->anmf);
    free(s->canvas);
-   free(s->disposed);
    free(s);
 }
 
@@ -1373,8 +1490,7 @@ rwebp_anim_stream_t *rwebp_anim_stream_open(const uint8_t *buf, size_t len)
 
    s->canvas_w = cw; s->canvas_h = ch; s->loop_count = loop;
    s->canvas   = (uint32_t*)calloc((size_t)cw * ch, sizeof(uint32_t));
-   s->disposed = (uint32_t*)calloc((size_t)cw * ch, sizeof(uint32_t));
-   if (!s->canvas || !s->disposed) goto ofail;
+   if (!s->canvas) goto ofail;
    return s;
 
 ofail:
@@ -1390,6 +1506,33 @@ void rwebp_anim_stream_get_info(const rwebp_anim_stream_t *s,
    if (height)     *height     = (unsigned)s->canvas_h;
    if (num_frames) *num_frames = s->num_anmf;
    if (loop_count) *loop_count = s->loop_count;
+}
+
+void rwebp_anim_stream_set_argb(rwebp_anim_stream_t *s, int argb)
+{
+   int want;
+   if (!s)
+      return;
+   want = argb ? 1 : 0;
+   if (want == s->emit_argb)
+      return;
+   /* The order is a property of the persistent canvas - later frames
+    * blend onto earlier pixels - so switching converts the canvas in
+    * place once, at a frame boundary, and subsequent sub-frames decode
+    * directly in the new order.  Before the first emitted frame the
+    * canvas is all zeros (identical in either order) and the flag can
+    * simply flip; the first frame is a key frame and rebuilds it. */
+   if (s->emitted > 0 && s->canvas)
+   {
+      size_t i, n = (size_t)s->canvas_w * s->canvas_h;
+      for (i = 0; i < n; i++)
+      {
+         uint32_t px  = s->canvas[i];
+         s->canvas[i] = (px & 0xFF00FF00u)
+               | ((px & 0xFFu) << 16) | ((px >> 16) & 0xFFu);
+      }
+   }
+   s->emit_argb = want;
 }
 
 void rwebp_anim_stream_rewind(rwebp_anim_stream_t *s)
@@ -1434,7 +1577,7 @@ const uint32_t *rwebp_anim_stream_next(rwebp_anim_stream_t *s,
          continue;
 
       sub = rwebp_anim_frame_pixels(d + 16, sz - 16, &sub_w, &sub_h,
-            &sub_opaque);
+            &sub_opaque, s->emit_argb ? 0 : 1);
       if (!sub)
          continue;
       if ((int)sub_w != fw || (int)sub_h != fh)
@@ -1448,9 +1591,22 @@ const uint32_t *rwebp_anim_stream_next(rwebp_anim_stream_t *s,
          is_key = s->prev_disp_bg && (s->prev_full || s->prev_key);
 
       if (is_key)
-         memset(s->canvas, 0, (size_t)cw * ch * sizeof(uint32_t));
-      else
-         memcpy(s->canvas, s->disposed, (size_t)cw * ch * sizeof(uint32_t));
+      {
+         /* When a full-canvas opaque copy follows, the memset would be
+          * overwritten entirely - skip it. */
+         if (!(   (no_blend || sub_opaque)
+               && rwebp_full_frame(fw, fh, cw, ch)))
+            memset(s->canvas, 0, (size_t)cw * ch * sizeof(uint32_t));
+      }
+      else if (s->prev_disp_bg)
+      {
+         /* Lazily apply the previous frame's dispose-to-background:
+          * clear its rectangle (the only region where the disposal
+          * state differs from the displayed canvas). */
+         for (y = 0; y < s->prev_fh; y++)
+            memset(s->canvas + (size_t)(s->prev_fy + y) * cw + s->prev_fx,
+                  0, (size_t)s->prev_fw * sizeof(uint32_t));
+      }
 
       for (y = 0; y < fh; y++)
       {
@@ -1467,13 +1623,10 @@ const uint32_t *rwebp_anim_stream_next(rwebp_anim_stream_t *s,
       }
       free(sub);
 
-      memcpy(s->disposed, s->canvas, (size_t)cw * ch * sizeof(uint32_t));
-      if (disp_bg)
-      {
-         for (y = 0; y < fh; y++)
-            memset(s->disposed + (size_t)(fy + y) * cw + fx, 0,
-                  (size_t)fw * sizeof(uint32_t));
-      }
+      s->prev_fx      = fx;
+      s->prev_fy      = fy;
+      s->prev_fw      = fw;
+      s->prev_fh      = fh;
       s->prev_disp_bg = disp_bg;
       s->prev_full    = rwebp_full_frame(fw, fh, cw, ch);
       s->prev_key     = is_key;
@@ -1546,18 +1699,17 @@ afail:
 #define RWEBP_PHASE_ROWS       1
 #define RWEBP_PHASE_FILTER     2
 #define RWEBP_PHASE_UPSAMPLE   3
-#define RWEBP_PHASE_SWIZZLE    4
-#define RWEBP_PHASE_L_PIXELS   5
-#define RWEBP_PHASE_L_XFORM    6
+#define RWEBP_PHASE_L_PIXELS   4
+#define RWEBP_PHASE_L_XFORM    5
 
 /* MB rows decoded per call (~0.5-3 ms depending on content and host),
- * loop-filter MB rows per call, upsampled luma rows per call, and
- * swizzled pixels per call. Each is sized to keep individual calls
- * well under a vsync so the caller's budget check stays responsive. */
+ * loop-filter MB rows per call, upsampled luma rows per call, VP8L
+ * pixels and inverse-transform rows per call. Each is sized to keep
+ * individual calls well under a vsync so the caller's budget check
+ * stays responsive. */
 #define RWEBP_ROWS_PER_CALL     4
 #define RWEBP_LF_ROWS_PER_CALL  8
 #define RWEBP_UPS_ROWS_PER_CALL 128
-#define RWEBP_SWZ_PX_PER_CALL   (512 * 1024)
 #define RWEBP_L_PX_PER_CALL     (64 * 1024)
 #define RWEBP_L_XF_ROWS_PER_CALL 256
 
@@ -1577,7 +1729,6 @@ struct rwebp
    } u;
    int phase;
    int cursor;       /* row / pixel progress within the current phase */
-   int swizzle;      /* supports_rgba latched at phase start */
 };
 
 /* Tear down an in-flight incremental decode. Frees the pending output
@@ -1628,7 +1779,9 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
             }
             rwebp->phase   = RWEBP_PHASE_ROWS;
             rwebp->cursor  = 0;
-            rwebp->swizzle = supports_rgba ? 1 : 0;
+            /* Channel order is selected at the YUV->RGB store inside
+             * rvp8_upsample_rows. */
+            rwebp->u.d.swap_rb = supports_rgba ? 1 : 0;
             *width  = (unsigned)rwebp->u.d.w;
             *height = (unsigned)rwebp->u.d.h;
             return IMAGE_PROCESS_NEXT;
@@ -1651,7 +1804,10 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
             {
                rwebp->phase   = RWEBP_PHASE_L_PIXELS;
                rwebp->cursor  = 0;
-               rwebp->swizzle = supports_rgba ? 1 : 0;
+               /* Channel order is fused into the final inverse
+                * transform pass (or the virtual swap stage for
+                * transform-less streams) inside vlbd_xform_rows. */
+               rwebp->u.l.b.swap_rb = supports_rgba ? 1 : 0;
                *width  = lw;
                *height = lh;
                return IMAGE_PROCESS_NEXT;
@@ -1693,17 +1849,6 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
          {
             rwebp->phase = RWEBP_PHASE_IDLE;
             return IMAGE_PROCESS_ERROR;
-         }
-         if (rwebp->swizzle)
-         {
-            /* Reuse the shared swizzle phase; it reads dimensions from
-             * the VP8 state slot, so park them there (the union member
-             * holding the lossless state is dead after vlbd_finish). */
-            rwebp->u.d.w = (int)lw;
-            rwebp->u.d.h = (int)lh;
-            rwebp->phase  = RWEBP_PHASE_SWIZZLE;
-            rwebp->cursor = 0;
-            return IMAGE_PROCESS_NEXT;
          }
          *buf_data = rwebp->output_image;
          rwebp->output_image = NULL; /* ownership -> caller */
@@ -1750,12 +1895,6 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
          *height = (unsigned)rwebp->u.d.h;
          if (rwebp->cursor >= rwebp->u.d.h)
          {
-            if (rwebp->swizzle)
-            {
-               rwebp->phase  = RWEBP_PHASE_SWIZZLE;
-               rwebp->cursor = 0;
-               return IMAGE_PROCESS_NEXT;
-            }
             *buf_data = rwebp->output_image;
             rwebp->output_image = NULL; /* ownership -> caller */
             rwebp_proc_reset(rwebp);
@@ -1763,34 +1902,18 @@ int rwebp_process_image(rwebp_t *rwebp, void **buf_data,
          }
          return IMAGE_PROCESS_NEXT;
 
-      case RWEBP_PHASE_SWIZZLE:
-      {
-         /* ARGB words -> ABGR (memory R,G,B,A), a bounded pixel batch
-          * per call; matches the rwebp_do output conversion. */
-         uint32_t *pix = rwebp->output_image;
-         int n = rwebp->u.d.w * rwebp->u.d.h;
-         int i = rwebp->cursor;
-         int e = i + RWEBP_SWZ_PX_PER_CALL;
-         if (e > n) e = n;
-         for (; i < e; i++)
-         {
-            uint32_t p = pix[i];
-            pix[i] = (p & 0xFF00FF00u) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF);
-         }
-         rwebp->cursor = e;
-         *width  = (unsigned)rwebp->u.d.w;
-         *height = (unsigned)rwebp->u.d.h;
-         if (e >= n)
-         {
-            *buf_data = rwebp->output_image;
-            rwebp->output_image = NULL; /* ownership -> caller */
-            rwebp_proc_reset(rwebp);
-            return IMAGE_PROCESS_END;
-         }
-         return IMAGE_PROCESS_NEXT;
-      }
    }
    return IMAGE_PROCESS_ERROR;
+}
+
+bool rwebp_still_ready(const void *buf, size_t avail)
+{
+   rw_ctr c;
+   /* rw_parse's chunk walk stops at the first chunk that does not fit
+    * inside 'avail', so success means the still image's chunk - and
+    * everything a decode of it touches - lies wholly within the
+    * prefix. */
+   return rw_parse((const uint8_t*)buf, avail, &c) != 0;
 }
 
 bool rwebp_set_buf_ptr(rwebp_t *rwebp, void *data, size_t len)
